@@ -23,7 +23,12 @@ In particular, we will be examining the area around the city of [Alexandroupolis
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 from rasterio.plot import show
+from rasterio.warp import transform_bounds
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
+import geoviews as gv
+from geoviews import opts
+from rasterio.crs import CRS
+gv.extension('bokeh')
 
 # GIS imports
 from shapely.geometry import Point
@@ -31,11 +36,15 @@ from osgeo import gdal
 from rasterio.merge import merge
 import rasterio
 import contextily as cx
-import folium
+import rioxarray
+import xyzservices.providers as xyz
+import cartopy.crs as ccrs 
 
 # data wrangling imports
 import pandas as pd
 import numpy as np
+import hvplot.xarray  # noqa
+import xarray as xr
 
 # misc imports
 from datetime import datetime, timedelta
@@ -51,18 +60,38 @@ gdal.SetConfigOption('GDAL_DISABLE_READDIR_ON_OPEN','EMPTY_DIR')
 gdal.SetConfigOption('CPL_VSIL_CURL_ALLOWED_EXTENSIONS','TIF, TIFF')
 ```
 
+### Deforestation in Madre de Dios, Peru
+
 ```python
-# Define data search parameters
+madre_de_dios = (-70.61, -11.89)
 
-# Define AOI as left, bottom, right and top lat/lon extent
-dadia_forest = Point(26.18, 41.08).buffer(0.1)
-
-# We will search data for the month of March 2024
-start_date = datetime(year=2023, month=8, day=1)
-stop_date = datetime(year=2023, month=9, day=30)
+ref_crs = CRS.from_epsg(4326)
+dst_crs = CRS.from_epsg(3857)
+map_bounds = transform_bounds(ref_crs, dst_crs, *Point(*madre_de_dios).buffer(10).bounds)
 ```
 
 ```python
+madre_de_dios_gv = gv.Points([madre_de_dios])
+
+basemap = gv.tile_sources.OSM
+plot = (madre_de_dios_gv*basemap).opts(
+    opts.Points(
+        color='red',
+        alpha=0.75,
+        size=25,
+        width=800,
+        height=800,
+        xlim=(map_bounds[0], map_bounds[2]),
+        ylim=(map_bounds[1], map_bounds[3]))
+)
+plot
+```
+
+```python
+# We will search data through the product record
+start_date = datetime(year=2022, month=1, day=1)
+stop_date = datetime.now()
+
 # We open a client instance to search for data, and retrieve relevant data records
 STAC_URL = 'https://cmr.earthdata.nasa.gov/stac'
 
@@ -75,13 +104,106 @@ collections = ["OPERA_L3_DIST-ALERT-HLS_V1"]
 # We would like to search data for August-September 2023
 date_range = f'{start_date.strftime("%Y-%m-%d")}/{stop_date.strftime("%Y-%m-%d")}'
 
-opts = {
-    'bbox' : dadia_forest.bounds, 
+search_opts = {
+    'bbox' : Point(*madre_de_dios).buffer(.1).bounds, 
     'collections': collections,
     'datetime' : date_range,
 }
 
-search = catalog.search(**opts)
+search = catalog.search(**search_opts)
+results = list(search.items_as_dicts())
+print(f"Number of tiles found intersecting given AOI: {len(results)}")
+```
+
+```python
+# Load results into a pandas dataframe
+granules = search_to_df(results)
+
+# filter to study a single geographic area
+granules = granules[granules.tile_id == 'T19LCG']
+
+# load data into an xarray dataset
+dataset= urls_to_dataset(granules[::10])
+```
+
+```python
+# Define color map to generate plot (Red, Green, Blue, Alpha)
+COLORS = [(1, 1, 1, 0)] * 256  # Initial set all values to white, with zero opacity
+COLORS[6:9] = [(1, 0, 0, 1)]       # Set class 6 to Red with 100% opacity
+
+# Create a ListedColormap
+cmap = ListedColormap(colors)
+```
+
+```python
+img = dataset.hvplot.quadmesh(title = 'Deforestation in Madre de Dios. Disturbance Alerts',
+                            x='lon', y='lat', 
+                            project=True, rasterize=True, 
+                            cmap=COLORS, 
+                            colorbar=False,
+                            widget_location='bottom',
+                            tiles = gv.tile_sources.OSM,
+                            xlabel='Longitude (degrees)',ylabel='Latitude (degrees)',
+                            fontscale=1.25,
+                            frame_width=900, frame_height=900,)
+
+img
+```
+
+### 2023 Greece wildfires
+
+```python
+# Define AOI as a point, to which we will apply a buffer
+dadia_forest = (26.18, 41.08)
+
+ref_crs = CRS.from_epsg(4326)
+dst_crs = CRS.from_epsg(3857)
+map_bounds = transform_bounds(ref_crs, dst_crs, *Point(*dadia_forest).buffer(.5).bounds)
+```
+
+```python
+dadia_forest_gv = gv.Points([dadia_forest])
+
+basemap = gv.tile_sources.OSM
+plot = (dadia_forest_gv*basemap).opts(
+    opts.Points(
+        color='red',
+        alpha=0.75,
+        size=25,
+        width=800,
+        height=800,
+        xlim=(map_bounds[0], map_bounds[2]),
+        ylim=(map_bounds[1], map_bounds[3]))
+)
+plot
+```
+
+```python
+# Define data search parameters
+
+# We will search data for the month of March 2024
+start_date = datetime(year=2023, month=8, day=1)
+stop_date = datetime(year=2023, month=9, day=30)
+
+# We open a client instance to search for data, and retrieve relevant data records
+STAC_URL = 'https://cmr.earthdata.nasa.gov/stac'
+
+# Setup PySTAC client
+# LPCLOUD refers to the LP DAAC cloud environment that hosts earth observation data
+catalog = Client.open(f'{STAC_URL}/LPCLOUD/') 
+
+collections = ["OPERA_L3_DIST-ALERT-HLS_V1"]
+
+# We would like to search data for August-September 2023
+date_range = f'{start_date.strftime("%Y-%m-%d")}/{stop_date.strftime("%Y-%m-%d")}'
+
+search_opts = {
+    'bbox' : Point(*dadia_forest).buffer(0.1).bounds, 
+    'collections': collections,
+    'datetime' : date_range,
+}
+
+search = catalog.search(**search_opts)
 ```
 
 NOTE: The OPERA DIST data product is hosted on [LP DAAC](https://lpdaac.usgs.gov/news/lp-daac-releases-opera-land-surface-disturbance-alert-version-1-data-product/), and this is specified when setting up the PySTAC client to search their catalog of data products in the above code cell.
@@ -222,34 +344,39 @@ plt.title('2023 Dadia forest wildfire detected extent', size=14)
 ### Great Green Wall, Sahel Region, Africa
 
 ```python
-ndiaye_senegal = Point(-16.09, 16.50)
+ndiaye_senegal = (-16.0913, 16.528)
 
+ref_crs = CRS.from_epsg(4326)
+dst_crs = CRS.from_epsg(3857)
+map_bounds = transform_bounds(ref_crs, dst_crs, *Point(*ndiaye_senegal).buffer(5).bounds)
+```
+
+```python
+print(gv.tile_sources.OSM)
+```
+
+```python
+ndiaye_senegal_gv = gv.Points([ndiaye_senegal])
+
+basemap = gv.tile_sources.OSM
+plot = (ndiaye_senegal_gv*basemap).opts(
+    opts.Points(
+        color='red',
+        alpha=0.75,
+        size=25,
+        width=800,
+        height=800,
+        xlim=(map_bounds[0], map_bounds[2]),
+        ylim=(map_bounds[1], map_bounds[3]))
+)
+plot
+```
+
+```python
 # We will search data through the product record
 start_date = datetime(year=2022, month=1, day=1)
 stop_date = datetime.now()
-```
 
-```python
-# Plotting search location in folium as a sanity check
-m = folium.Map(location=(ndiaye_senegal.y, ndiaye_senegal.x), control_scale = True, zoom_start=9)
-radius = 5000
-folium.Circle(
-    location=[ndiaye_senegal.y, ndiaye_senegal.x],
-    radius=radius,
-    color="red",
-    stroke=False,
-    fill=True,
-    fill_opacity=0.6,
-    opacity=1,
-    popup="{} pixels".format(radius),
-    tooltip="50 px radius",
-    # 
-).add_to(m)
-
-m
-```
-
-```python
 # We open a client instance to search for data, and retrieve relevant data records
 STAC_URL = 'https://cmr.earthdata.nasa.gov/stac'
 
@@ -257,20 +384,24 @@ STAC_URL = 'https://cmr.earthdata.nasa.gov/stac'
 # LPCLOUD refers to the LP DAAC cloud environment that hosts earth observation data
 catalog = Client.open(f'{STAC_URL}/LPCLOUD/') 
 
-collections = ["OPERA_L3_DIST-ANN-HLS_V1"]
+collections = ["OPERA_L3_DIST-ALERT-HLS_V1"]
 
 # We would like to search data for August-September 2023
 date_range = f'{start_date.strftime("%Y-%m-%d")}/{stop_date.strftime("%Y-%m-%d")}'
 
-opts = {
-    'bbox' : ndiaye_senegal.bounds, 
+search_opts = {
+    'bbox' : Point(*ndiaye_senegal).buffer(.1).bounds, 
     'collections': collections,
     'datetime' : date_range,
 }
 
-search = catalog.search(**opts)
+search = catalog.search(**search_opts)
 results = list(search.items_as_dicts())
 print(f"Number of tiles found intersecting given AOI: {len(results)}")
+```
+
+```python
+granules = search_to_df(results)
 ```
 
 ```python
@@ -316,7 +447,7 @@ def urls_to_dataset(granule_dataframe):
                 band=np.arange(img.shape[0])
             ),
             attrs=dict(
-                description="OPERA DIST ANN",
+                description="OPERA DIST data",
                 units=None,
             ),
         )
@@ -325,5 +456,57 @@ def urls_to_dataset(granule_dataframe):
         dataset_list.append(da)
     return xr.concat(dataset_list, dim='time').squeeze()
 
-dataset= urls_to_dataset(granules)
+# since there are a large number of results, we pick only every 100th tile this demonstration
+dataset= urls_to_dataset(granules[::10])
+```
+
+```python
+COLORS = [(0, 0, 0, 0)]*256
+for i in [5, 6, 8]:
+    COLORS[i] = (255, 0, 0, 1)
+```
+
+```python
+img = dataset.hvplot.quadmesh(title = 'Great Green Wall, Sahel Region, Africa. Disturbance Alerts',
+                            x='lon', y='lat', 
+                            project=True, rasterize=True, 
+                            cmap=COLORS, 
+                            colorbar=False,
+                            widget_location='bottom',
+                            tiles = gv.tile_sources.OSM,
+                            xlabel='Longitude (degrees)',ylabel='Latitude (degrees)',
+                            fontscale=1.25,
+                            frame_width=800, frame_height=800,)
+
+img
+```
+
+### Deforestation in Parra, Brazil
+
+
+Deforestation in the Amazon Rainforest of [Para, Brazil](https://storymaps.arcgis.com/stories/4036b210530b47e884befbc35ec7c482) is an ongoing problem with significant environmental impacts as well displacement of local indigenous populations. The tree loss is driven mainly by forest being cleared for cattle ranching, soy cultivation, and illegal gold mining and logging.
+
+```python
+maravilha_lonlat = (-60.732, -2.403)
+
+ref_crs = CRS.from_epsg(4326)
+dst_crs = CRS.from_epsg(3857)
+map_bounds = transform_bounds(ref_crs, dst_crs, *Point(*maravilha_lonlat).buffer(10).bounds)
+```
+
+```python
+maravilha = gv.Points([maravilha_lonlat])
+
+basemap = gv.tile_sources.OSM
+plot = (maravilha*basemap).opts(
+    opts.Points(
+        color='red',
+        alpha=0.75,
+        size=25,
+        width=800,
+        height=800,
+        xlim=(map_bounds[0], map_bounds[2]),
+        ylim=(map_bounds[1], map_bounds[3]))
+)
+plot
 ```
