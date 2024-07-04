@@ -5,7 +5,7 @@ jupyter:
       extension: .md
       format_name: markdown
       format_version: '1.3'
-      jupytext_version: 1.16.1
+      jupytext_version: 1.16.2
   kernelspec:
     display_name: Python 3 (ipykernel)
     language: python
@@ -14,9 +14,7 @@ jupyter:
 
 # Retrieving Disturbance Data
 
-The [OPERA DIST-HLS data product](https://lpdaac.usgs.gov/documents/1766/OPERA_DIST_HLS_Product_Specification_V1.pdf) can be used to study the impacts and evolution of wildfires at a large scale. In this notebook, we will retrieve data associated with the [2023 Greece wildfires](https://en.wikipedia.org/wiki/2023_Greece_wildfires) to understand its evolution and extent. We will also generate a time series visualization of the event.
-
-In particular, we will be examining the area around the city of [Alexandroupolis](https://en.wikipedia.org/wiki/Alexandroupolis) which was severely impacted by the wildfires, resulting in loss of lives, property, and forested areas.
+The [OPERA DIST-HLS data product](https://lpdaac.usgs.gov/documents/1766/OPERA_DIST_HLS_Product_Specification_V1.pdf) can be used to study the evolution of vegetation loss due to natural and anthropogenic causes.
 
 ```python
 # Plotting imports
@@ -62,8 +60,11 @@ gdal.SetConfigOption('CPL_VSIL_CURL_ALLOWED_EXTENSIONS','TIF, TIFF')
 
 ### Deforestation in Madre de Dios, Peru
 
+
+Deforestation associated with illegal mining activities is an ongoing challenge in the Madre De Dios region of Peru [[1]](https://news.mongabay.com/2023/12/perus-crackdown-on-illegal-gold-mining-a-success-but-only-briefly-study-shows/). In this example, we look at the OPERA DIST-ALERT data product to understand the occurrence of vegetation loss as seen in the product record.
+
 ```python
-madre_de_dios = (-70.61, -11.89)
+madre_de_dios = (-69.6, -12.84)
 
 ref_crs = CRS.from_epsg(4326)
 dst_crs = CRS.from_epsg(3857)
@@ -86,6 +87,8 @@ plot = (madre_de_dios_gv*basemap).opts(
 )
 plot
 ```
+
+NOTE: The OPERA DIST data product is hosted on [LP DAAC](https://lpdaac.usgs.gov/news/lp-daac-releases-opera-land-surface-disturbance-alert-version-1-data-product/), and this is specified when setting up the PySTAC client to search their catalog of data products in the above code cell.
 
 ```python
 # We will search data through the product record
@@ -116,23 +119,104 @@ print(f"Number of tiles found intersecting given AOI: {len(results)}")
 ```
 
 ```python
+def urls_to_dataset(granule_dataframe):
+    '''method that takes in a list of OPERA tile URLs and returns an xarray dataset with dimensions
+    latitude, longitude and time'''
+
+    dataset_list = []
+    
+    for i, row in granule_dataframe.iterrows():
+        with rasterio.open(row.hrefs) as ds:
+            # extract CRS string
+            crs = str(ds.crs).split(':')[-1]
+
+            # extract the image spatial extent (xmin, ymin, xmax, ymax)
+            xmin, ymin, xmax, ymax = ds.bounds
+
+            # the x and y resolution of the image is available in image metadata
+            x_res = np.abs(ds.transform[0])
+            y_res = np.abs(ds.transform[4])
+
+            # read the data 
+            img = ds.read()
+
+            # Ensure img has three dimensions (bands, y, x)
+            if img.ndim == 2:
+                img = np.expand_dims(img, axis=0) 
+
+            
+
+        lon = np.arange(xmin, xmax, x_res)
+        lat = np.arange(ymax, ymin, -y_res)
+
+        lon_grid, lat_grid = np.meshgrid(lon, lat)
+
+        da = xr.DataArray(
+            data=img,
+            dims=["band", "y", "x"],
+            coords=dict(
+                lon=(["y", "x"], lon_grid),
+                lat=(["y", "x"], lat_grid),
+                time=i,
+                band=np.arange(img.shape[0])
+            ),
+            attrs=dict(
+                description="OPERA DIST data",
+                units=None,
+            ),
+        )
+        da.rio.write_crs(crs, inplace=True)
+
+        dataset_list.append(da)
+    return xr.concat(dataset_list, dim='time').squeeze()
+```
+
+```python
+def search_to_df(results, layer_name = 'VEG-DIST-STATUS'):
+
+        times = pd.DatetimeIndex([result['properties']['datetime'] for result in results]) # parse of timestamp for each result
+        data = {'hrefs': [value['href'] for result in results for key, value in result['assets'].items() if layer_name in key],  # parse out links only to DIST-STATUS data layer
+                'tile_id': [value['href'].split('/')[-1].split('_')[3] for result in results for key, value in result['assets'].items() if layer_name in key]}
+
+        # Construct pandas dataframe to summarize granules from search results
+        granules = pd.DataFrame(index=times, data=data)
+        granules.index.name = 'times'
+
+        return granules
+```
+
+```python
 # Load results into a pandas dataframe
 granules = search_to_df(results)
 
 # filter to study a single geographic area
-granules = granules[granules.tile_id == 'T19LCG']
+granules = granules[granules.tile_id == 'T19LDG']
 
-# load data into an xarray dataset
-dataset= urls_to_dataset(granules[::10])
+# # load data into an xarray dataset
+dataset= urls_to_dataset(granules[::8])
 ```
+
+**Relevant layer Values for DIST-ALERT product:**
+
+* **0:** No disturbance<br>
+* **1:** First detection of disturbance with vegetation cover change <50% <br>
+* **2:** Provisional detection of disturbance with vegetation cover change <50% <br>
+* **3:** Confirmed detection of disturbance with vegetation cover change <50% <br>
+* **4:** First detection of disturbance with vegetation cover change >50% <br>
+* **5:** Provisional detection of disturbance with vegetation cover change >50% <br>
+* **6:** Confirmed detection of disturbance with vegetation cover change >50% <br>
+* **7:** Finished detection of disturbance with vegetation cover change <50% <br>
+* **8:** Finished detection of disturbance with vegetation cover change >50% <br>
 
 ```python
 # Define color map to generate plot (Red, Green, Blue, Alpha)
-COLORS = [(1, 1, 1, 0)] * 256  # Initial set all values to white, with zero opacity
-COLORS[6:9] = [(1, 0, 0, 1)]       # Set class 6 to Red with 100% opacity
+COLORS = [(255, 255, 255, .1)] * 256  # Initial set all values to white, with 10% opacity
 
-# Create a ListedColormap
-cmap = ListedColormap(colors)
+# We would like to visualze only pixels with confirmed and finished disturbances
+COLORS[3] = (255, 0, 0, 1)
+COLORS[6] = (255, 0, 0, 1)
+COLORS[7] = (255, 0, 0, 1)
+COLORS[8] = (255, 0, 0, 1)
 ```
 
 ```python
@@ -142,7 +226,7 @@ img = dataset.hvplot.quadmesh(title = 'Deforestation in Madre de Dios. Disturban
                             cmap=COLORS, 
                             colorbar=False,
                             widget_location='bottom',
-                            tiles = gv.tile_sources.OSM,
+                            tiles = gv.tile_sources.ESRI,
                             xlabel='Longitude (degrees)',ylabel='Latitude (degrees)',
                             fontscale=1.25,
                             frame_width=900, frame_height=900,)
@@ -150,7 +234,99 @@ img = dataset.hvplot.quadmesh(title = 'Deforestation in Madre de Dios. Disturban
 img
 ```
 
+### Great Green Wall, Sahel Region, Africa
+
+```python
+ndiaye_senegal = (-16.0913, 16.528)
+
+ref_crs = CRS.from_epsg(4326)
+dst_crs = CRS.from_epsg(3857)
+map_bounds = transform_bounds(ref_crs, dst_crs, *Point(*ndiaye_senegal).buffer(5).bounds)
+```
+
+```python
+ndiaye_senegal_gv = gv.Points([ndiaye_senegal])
+
+basemap = gv.tile_sources.OSM
+plot = (ndiaye_senegal_gv*basemap).opts(
+    opts.Points(
+        color='red',
+        alpha=0.75,
+        size=25,
+        width=800,
+        height=800,
+        xlim=(map_bounds[0], map_bounds[2]),
+        ylim=(map_bounds[1], map_bounds[3]))
+)
+plot
+```
+
+```python
+# We will search data through the product record
+start_date = datetime(year=2022, month=1, day=1)
+stop_date = datetime.now()
+
+# We open a client instance to search for data, and retrieve relevant data records
+STAC_URL = 'https://cmr.earthdata.nasa.gov/stac'
+
+# Setup PySTAC client
+# LPCLOUD refers to the LP DAAC cloud environment that hosts earth observation data
+catalog = Client.open(f'{STAC_URL}/LPCLOUD/') 
+
+collections = ["OPERA_L3_DIST-ALERT-HLS_V1"]
+
+# We would like to search data for August-September 2023
+date_range = f'{start_date.strftime("%Y-%m-%d")}/{stop_date.strftime("%Y-%m-%d")}'
+
+search_opts = {
+    'bbox' : Point(*ndiaye_senegal).buffer(.1).bounds, 
+    'collections': collections,
+    'datetime' : date_range,
+}
+
+search = catalog.search(**search_opts)
+results = list(search.items_as_dicts())
+print(f"Number of tiles found intersecting given AOI: {len(results)}")
+```
+
+```python
+granules = search_to_df(results)
+
+# load data into an xarray dataset
+dataset= urls_to_dataset(granules[::8])
+```
+
+```python
+# Define color map to generate plot (Red, Green, Blue, Alpha)
+COLORS = [(255, 255, 255, .1)] * 256  # Initial set all values to white, with 10% opacity
+
+# We would like to visualze only pixels with confirmed and finished disturbances
+COLORS[3] = (255, 0, 0, 1)
+COLORS[6] = (255, 0, 0, 1)
+COLORS[7] = (255, 0, 0, 1)
+COLORS[8] = (255, 0, 0, 1)
+```
+
+```python
+img = dataset.hvplot.quadmesh(title = 'Great Green Wall, Sahel Region, Africa. Disturbance Alerts',
+                            x='lon', y='lat', 
+                            project=True, rasterize=True, 
+                            cmap=COLORS, 
+                            colorbar=False,
+                            widget_location='bottom',
+                            tiles = gv.tile_sources.OSM,
+                            xlabel='Longitude (degrees)',ylabel='Latitude (degrees)',
+                            fontscale=1.25,
+                            frame_width=800, frame_height=800,)
+
+img
+```
+
 ### 2023 Greece wildfires
+
+In this example, we will retrieve data associated with the [2023 Greece wildfires](https://en.wikipedia.org/wiki/2023_Greece_wildfires) to understand its evolution and extent. We will also generate a time series visualization of the event.
+
+In particular, we will be examining the area around the city of [Alexandroupolis](https://en.wikipedia.org/wiki/Alexandroupolis) which was severely impacted by the wildfires, resulting in loss of lives, property, and forested areas.
 
 ```python
 # Define AOI as a point, to which we will apply a buffer
@@ -206,8 +382,6 @@ search_opts = {
 search = catalog.search(**search_opts)
 ```
 
-NOTE: The OPERA DIST data product is hosted on [LP DAAC](https://lpdaac.usgs.gov/news/lp-daac-releases-opera-land-surface-disturbance-alert-version-1-data-product/), and this is specified when setting up the PySTAC client to search their catalog of data products in the above code cell.
-
 ```python
 results = list(search.items_as_dicts())
 print(f"Number of tiles found intersecting given AOI: {len(results)}")
@@ -216,23 +390,8 @@ print(f"Number of tiles found intersecting given AOI: {len(results)}")
 Let's load the search results into a pandas dataframe
 
 ```python
-def search_to_df(results, layer_name = 'VEG-DIST-STATUS'):
-
-        times = pd.DatetimeIndex([result['properties']['datetime'] for result in results]) # parse of timestamp for each result
-        data = {'hrefs': [value['href'] for result in results for key, value in result['assets'].items() if layer_name in key],  # parse out links only to DIST-STATUS data layer
-                'tile_id': [value['href'].split('/')[-1].split('_')[3] for result in results for key, value in result['assets'].items() if layer_name in key]}
-
-        # Construct pandas dataframe to summarize granules from search results
-        granules = pd.DataFrame(index=times, data=data)
-        granules.index.name = 'times'
-
-        return granules
-```
-
-```python
 granules = search_to_df(results)
 granules.head()
-
 ```
 
 ```python
@@ -258,16 +417,6 @@ refined_granules = pd.DataFrame(index=refined_granules.keys(), data = {'hrefs':r
 dates_of_interest = [datetime(year=2023, month=8, day=1), datetime(year=2023, month=8, day=26), datetime(year=2023, month=9, day=18)]
 hrefs_of_interest = [x.hrefs for i, x in refined_granules.iterrows() if datetime.strptime(i, '%Y-%m-%d') in dates_of_interest]
 ```
-
-**Relevant layer Values for DIST-ALERT product:**
-
-* **0:** No disturbance<br>
-* **1:** First detection of disturbance with vegetation cover change <50% <br>
-* **2:** Provisional detection of disturbance with vegetation cover change <50% <br>
-* **3:** Confirmed detection of disturbance with vegetation cover change <50% <br>
-* **4:** First detection of disturbance with vegetation cover change >50% <br>
-* **5:** Provisional detection of disturbance with vegetation cover change >50% <br>
-* **6:** Confirmed detection of disturbance with vegetation cover change >50% <br>
 
 ```python
 # Define color map to generate plot (Red, Green, Blue, Alpha)
@@ -341,25 +490,24 @@ plt.xticks([datetime(year=2023, month=8, day=1) + timedelta(days=6*i) for i in r
 plt.title('2023 Dadia forest wildfire detected extent', size=14)
 ```
 
-### Great Green Wall, Sahel Region, Africa
+### Deforestation in Parra, Brazil
+
+
+Deforestation in the Amazon Rainforest of [Para, Brazil](https://storymaps.arcgis.com/stories/4036b210530b47e884befbc35ec7c482) is an ongoing problem with significant environmental impacts as well displacement of local indigenous populations. The tree loss is driven mainly by forest being cleared for cattle ranching, soy cultivation, and illegal gold mining and logging.
 
 ```python
-ndiaye_senegal = (-16.0913, 16.528)
+maravilha_lonlat = (-60.732, -2.403)
 
 ref_crs = CRS.from_epsg(4326)
 dst_crs = CRS.from_epsg(3857)
-map_bounds = transform_bounds(ref_crs, dst_crs, *Point(*ndiaye_senegal).buffer(5).bounds)
+map_bounds = transform_bounds(ref_crs, dst_crs, *Point(*maravilha_lonlat).buffer(10).bounds)
 ```
 
 ```python
-print(gv.tile_sources.OSM)
-```
-
-```python
-ndiaye_senegal_gv = gv.Points([ndiaye_senegal])
+maravilha = gv.Points([maravilha_lonlat])
 
 basemap = gv.tile_sources.OSM
-plot = (ndiaye_senegal_gv*basemap).opts(
+plot = (maravilha*basemap).opts(
     opts.Points(
         color='red',
         alpha=0.75,
@@ -390,7 +538,7 @@ collections = ["OPERA_L3_DIST-ALERT-HLS_V1"]
 date_range = f'{start_date.strftime("%Y-%m-%d")}/{stop_date.strftime("%Y-%m-%d")}'
 
 search_opts = {
-    'bbox' : Point(*ndiaye_senegal).buffer(.1).bounds, 
+    'bbox' : Point(*maravilha_lonlat).buffer(.1).bounds, 
     'collections': collections,
     'datetime' : date_range,
 }
@@ -401,73 +549,15 @@ print(f"Number of tiles found intersecting given AOI: {len(results)}")
 ```
 
 ```python
+# load results into a dataframe
 granules = search_to_df(results)
+
+# load data into an xarray dataset
+dataset= urls_to_dataset(granules[::8])
 ```
 
 ```python
-def urls_to_dataset(granule_dataframe):
-    '''method that takes in a list of OPERA tile URLs and returns an xarray dataset with dimensions
-    latitude, longitude and time'''
-
-    dataset_list = []
-    
-    for i, row in granule_dataframe.iterrows():
-        with rasterio.open(row.hrefs) as ds:
-            # extract CRS string
-            crs = str(ds.crs).split(':')[-1]
-
-            # extract the image spatial extent (xmin, ymin, xmax, ymax)
-            xmin, ymin, xmax, ymax = ds.bounds
-
-            # the x and y resolution of the image is available in image metadata
-            x_res = np.abs(ds.transform[0])
-            y_res = np.abs(ds.transform[4])
-
-            # read the data 
-            img = ds.read()
-
-            # Ensure img has three dimensions (bands, y, x)
-            if img.ndim == 2:
-                img = np.expand_dims(img, axis=0) 
-
-            
-
-        lon = np.arange(xmin, xmax, x_res)
-        lat = np.arange(ymax, ymin, -y_res)
-
-        lon_grid, lat_grid = np.meshgrid(lon, lat)
-
-        da = xr.DataArray(
-            data=img,
-            dims=["band", "y", "x"],
-            coords=dict(
-                lon=(["y", "x"], lon_grid),
-                lat=(["y", "x"], lat_grid),
-                time=i,
-                band=np.arange(img.shape[0])
-            ),
-            attrs=dict(
-                description="OPERA DIST data",
-                units=None,
-            ),
-        )
-        da.rio.write_crs(crs, inplace=True)
-
-        dataset_list.append(da)
-    return xr.concat(dataset_list, dim='time').squeeze()
-
-# since there are a large number of results, we pick only every 100th tile this demonstration
-dataset= urls_to_dataset(granules[::10])
-```
-
-```python
-COLORS = [(0, 0, 0, 0)]*256
-for i in [5, 6, 8]:
-    COLORS[i] = (255, 0, 0, 1)
-```
-
-```python
-img = dataset.hvplot.quadmesh(title = 'Great Green Wall, Sahel Region, Africa. Disturbance Alerts',
+img = dataset.hvplot.quadmesh(title = 'Vegetation loss in Parra, Brazil. Disturbance Alerts',
                             x='lon', y='lat', 
                             project=True, rasterize=True, 
                             cmap=COLORS, 
@@ -479,34 +569,4 @@ img = dataset.hvplot.quadmesh(title = 'Great Green Wall, Sahel Region, Africa. D
                             frame_width=800, frame_height=800,)
 
 img
-```
-
-### Deforestation in Parra, Brazil
-
-
-Deforestation in the Amazon Rainforest of [Para, Brazil](https://storymaps.arcgis.com/stories/4036b210530b47e884befbc35ec7c482) is an ongoing problem with significant environmental impacts as well displacement of local indigenous populations. The tree loss is driven mainly by forest being cleared for cattle ranching, soy cultivation, and illegal gold mining and logging.
-
-```python
-maravilha_lonlat = (-60.732, -2.403)
-
-ref_crs = CRS.from_epsg(4326)
-dst_crs = CRS.from_epsg(3857)
-map_bounds = transform_bounds(ref_crs, dst_crs, *Point(*maravilha_lonlat).buffer(10).bounds)
-```
-
-```python
-maravilha = gv.Points([maravilha_lonlat])
-
-basemap = gv.tile_sources.OSM
-plot = (maravilha*basemap).opts(
-    opts.Points(
-        color='red',
-        alpha=0.75,
-        size=25,
-        width=800,
-        height=800,
-        xlim=(map_bounds[0], map_bounds[2]),
-        ylim=(map_bounds[1], map_bounds[3]))
-)
-plot
 ```
