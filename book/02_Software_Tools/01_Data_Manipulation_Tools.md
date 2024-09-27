@@ -15,7 +15,7 @@ jupyter:
 # Data Manipulation Tools
 
 <!-- #region jupyter={"source_hidden": true} -->
-In this tutorial, we'll make use of a number of Python libraries to work with geospatial data. There are numerous ways to work with data and so choosing tooling can be difficult. The principal library we'll be using is [*Xarray*](https://docs.xarray.dev/en/stable/index.html) for its `DataArray` and `Dataset` data structures and associated utilities as well as [NumPy](https://numpy.org) and [Pandas](https://pandas.pydata.org) for manipulating homogeneous numerical arrays and tabular data respectively. We'll also make use of [Rasterio](https://rasterio.readthedocs.io/en/stable) as a tool for reading data or meta-data from GeoTIFF files; judicious use of Rasterio can make a big difference when working with remote files in the cloud.
+In this tutorial, we'll make use of a number of Python libraries to work with geospatial data. There are numerous libraries and possible approaches, so choosing tooling can be difficult. The principal library we'll use is [*Xarray*](https://docs.xarray.dev/en/stable/index.html) for its `DataArray` and `Dataset` data structures and associated utilities. We'll also use [NumPy](https://numpy.org) and [Pandas](https://pandas.pydata.org) for manipulating homogeneous numerical arrays and tabular data respectively. Finally, we'll make use of [Rasterio](https://rasterio.readthedocs.io/en/stable) and [rioxarray](https://corteva.github.io/rioxarray/html/index.html) as tools for reading data or meta-data from GeoTIFF files; judicious use of Rasterio can make a big difference when working with remote files in the cloud.
 <!-- #endregion -->
 
 ```python jupyter={"source_hidden": true}
@@ -61,7 +61,7 @@ da_remote = rio.open_rasterio(REMOTE_URL)
 ```
 
 <!-- #region jupyter={"source_hidden": true} -->
-This next operation compares elements of an Xarray `DataArray` elementwise (the use of the `.all` method is similar to what we would do to compare NumPy arrays). This is generally not an advisable way to compare arrays, series, dataframes, or other large data structures that contain many elements. However, in this particular instance, because the two data structures have been read from the same file stored in two different locations, element-by-element comparison in memory confirms that the data loaded from two different sources is identical in every bit.
+This next operation in the cell below compares elements of an Xarray `DataArray` elementwise (the use of the `.all` method is similar to what we would do to compare NumPy arrays). This is generally not an advisable way to compare arrays, series, dataframes, or other large data structures that contain many elements. However, in this particular instance, because the two data structures have been read from the same file stored in two different locations, element-by-element comparison in memory confirms that the data loaded from two different sources is identical in every bit.
 <!-- #endregion -->
 
 ```python
@@ -114,7 +114,7 @@ print(da.coords['x'].values)
 ```
 
 <!-- #region jupyter={"source_hidden": true} -->
-`data.attrs` is a dictionary containing other meta-data parsed from the GeoTIFF tags (the "Attributes" in the graphical view). Again, this is why `rioxarray` is useful; it is possible to write code that loads data from various fileformats into Xarray `DataArray`s, but this package wraps a lot of the messy code that would, e.g., populate `da.attrs`.
+`da.attrs` is a dictionary containing other meta-data parsed from the GeoTIFF tags (the "Attributes" in the graphical view). Again, this is why `rioxarray` is useful; it is possible to write code that loads data from various file formats into Xarray `DataArray`s, but this package wraps a lot of the messy code that would, e.g., populate `da.attrs`.
 <!-- #endregion -->
 
 ```python jupyter={"source_hidden": true}
@@ -124,7 +124,7 @@ da.attrs
 ### Using the DataArray rio accessor
 
 <!-- #region jupyter={"source_hidden": true} -->
-As mentioned, `rioxarray` extends the class `xarray.DataArray` with an *accessor* called `rio`. The `rio` accessor effectively adds a namespace with a variety of attributes. WE can use a Python list comprehension to display those that do not start with an underscore (the so-called "private" and "dunder" methods/attributes).
+As mentioned, `rioxarray` extends the class `xarray.DataArray` with an *accessor* called `rio`. The `rio` accessor effectively adds a namespace with a variety of attributes and methods. We can use a Python list comprehension to display attributes or methods whose identifiers do not begin with an underscore (the so-called "private" and "dunder" methods/attributes).
 <!-- #endregion -->
 
 ```python jupyter={"source_hidden": true}
@@ -133,7 +133,7 @@ As mentioned, `rioxarray` extends the class `xarray.DataArray` with an *accessor
 ```
 
 <!-- #region jupyter={"source_hidden": true} -->
-The attribute `da.rio.crs` is important for our purposes; it provides access to the coordinate reference system associated with this raster dataset.
+The attribute `da.rio.crs` is important for our purposes; it provides access to the coordinate reference system associated with this raster dataset. We will use this later when making plots that overlay raster data on background geographical tiles.
 <!-- #endregion -->
 
 ```python jupyter={"source_hidden": true}
@@ -152,7 +152,7 @@ From [Wikipedia](https://en.wikipedia.org/wiki/EPSG_Geodetic_Parameter_Dataset):
 ### Manipulating data in a DataArray
 
 <!-- #region jupyter={"source_hidden": true} -->
-Given that this data is stored using a particular [Universal Transverse Mercator (UTM)](https://en.wikipedia.org/wiki/Universal_Transverse_Mercator_coordinate_system) CRS, let's relabel the coordinates to reflect this; that is, the coordinate labelled `x` would conventionally be called `easting` and the coordinate called `y` would be called `northing`.
+Given that the data loaded from the file is stored using a particular [Universal Transverse Mercator (UTM)](https://en.wikipedia.org/wiki/Universal_Transverse_Mercator_coordinate_system) CRS, let's relabel the coordinates to reflect this; that is, the coordinate labelled `x` would conventionally be called `easting` and the coordinate called `y` would be called `northing`.
 <!-- #endregion -->
 
 ```python jupyter={"source_hidden": true}
@@ -184,7 +184,7 @@ da.isel(band=0).plot();
 ```
 
 <!-- #region jupyter={"source_hidden": true} -->
-The plot produced is rather dark (reflecting that most of the entries are zero according to the legend). Notice that the axes are labelled automatically using the `coords` we renamed before.
+The plot produced is rather dark (reflecting the fact that most of the numerical entries are zero). Notice that the axes are labelled automatically using the `coords` as we renamed them before.
 <!-- #endregion -->
 
 ### Extracting DataArray data to NumPy, Pandas
@@ -202,7 +202,7 @@ print(f'{array.nbytes=}')
 ```
 
 <!-- #region jupyter={"source_hidden": true} -->
-This raster data is stored as 8-bit unsigned integer data, so one byte for each pixel. A single unsigned 8-bit integer can represent integer values between 0 and 255. In an array with a bit more than thirteen million elements, that means there are many repeated values. We can see by putting the pixel values into a Pandas `Series` and using the `.value_counts` method.
+This raster data is stored as 8-bit unsigned integer data, so one byte for each pixel. A single unsigned 8-bit integer can represent integer values between 0 and 255. In an array that contains roughly thirteen million 8-bit unsigned integers, that means there are many repeated values. We can see by putting the pixel values into a Pandas `Series` and using the `.value_counts` method.
 <!-- #endregion -->
 
 ```python jupyter={"source_hidden": true}
@@ -211,7 +211,7 @@ s_flat.sort_index()
 ```
 
 <!-- #region jupyter={"source_hidden": true} -->
-Most of the entries in this raster array are zero. The numerical values vary between 0 and 100 with the exception of some 1,700 pixels with the value 255. This will make more sense when we discuss the DIST data product specification.
+Most of the entries in this raster array are zero. The numerical values vary between 0 and 100 with the exception of some 1,700 pixels with the value 255. We will later see how to interpret these numerical values when we discuss the DIST data product specification.
 <!-- #endregion -->
 
 ## [rasterio](https://rasterio.readthedocs.io/en/stable)
@@ -251,6 +251,7 @@ ds.close()
 ```
 
 As with file-handling in Python, we can use a *context manager* (i.e., a `with` clause) instead.
+
 ```python
 with rasterio.open(LOCAL_PATH) as ds:
   ...

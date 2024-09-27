@@ -2,6 +2,7 @@
 
 
 The following summary was made using:
+
 + the [QGIS documentation](https://docs.qgis.org/3.34/en/docs/gentle_gis_introduction/coordinate_reference_systems.html)
 + the book [*Sistemas de Información Geográfica*](https://volaya.github.io/libro-sig/) by Victor Olaya
 
